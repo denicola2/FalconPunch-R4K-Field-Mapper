@@ -43,7 +43,7 @@
     if (tag)                  \
       PRINTF("[%s] ", tag); \
     PRINTF(__VA_ARGS__);      \
-    PRINTF("\n");             \
+    PRINTF("\r\n");             \
   } while (0)
 #else
 #define MYLOG(...)
@@ -70,6 +70,9 @@ void ftester_GPSBusy(bool busy);
 /** Examples for application events */
 #define ACC_TRIGGER 0b1000000000000000
 #define N_ACC_TRIGGER 0b0111111111111111
+
+#define BTN_TRIGGER 0b0100000000000000
+#define N_BTN_TRIGGER 0b1011111111111111
 
 /** Application stuff */
 extern BaseType_t g_higher_priority_task_woken;

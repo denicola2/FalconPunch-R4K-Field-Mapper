@@ -1,20 +1,21 @@
 /**
  * @file app.cpp
  * @author Bernd Giesecke (bernd.giesecke@rakwireless.com)
- * @brief Application specific functions. Mandatory to have init_app(), 
+ * @brief Application specific functions. Mandatory to have init_app(),
  *        app_event_handler(), ble_data_handler(), lora_data_handler()
  *        and lora_tx_finished()
  * @version 0.1
  * @date 2021-04-23
- * 
+ *
  * @copyright Copyright (c) 2021
- * 
+ *
  */
 
 #include "app.h"
+#include "credentials.h"
 
 /** Set the device name, max length is 10 characters */
-char g_ble_dev_name[10] = "WB-Mapper";
+char g_ble_dev_name[10] = "IoTA";
 
 /** Flag showing if TX cycle is ongoing */
 bool lora_busy = false;
@@ -38,18 +39,17 @@ time_t min_delay = 45000;
 /** The GPS module to use */
 uint8_t gnss_option;
 
-
-
 // Forward declaration
 void send_delayed(TimerHandle_t unused);
+void btn_int_callback(void);
 
 /**
  * @brief Application specific setup functions
- * 
+ *
  */
 void setup_app(void)
 {
-		// Called in the very beginning of setup
+	// Called in the very beginning of setup
 	/**************************************************************/
 	/**************************************************************/
 	/// \todo set g_enable_ble to true if you want to enable BLE
@@ -59,15 +59,45 @@ void setup_app(void)
 	/**************************************************************/
 	g_enable_ble = true;
 	api_set_version(1, 0, 2);
+
+	// Read LoRaWAN settings from flash
+	api_read_credentials();
+
+	// Modify credentials to be unique in credentials.h
+	uint8_t node_device_eui[8] = NODE_DEVICE_EUI;
+	uint8_t node_app_eui[8] = NODE_APP_EUI;
+	uint8_t node_app_key[16] = NODE_APP_KEY;
+
+	// Change LoRaWAN settings
+	g_lorawan_settings.lorawan_enable = true;
+	g_lorawan_settings.auto_join = true;
+	g_lorawan_settings.otaa_enabled = true;
+	memcpy(g_lorawan_settings.node_device_eui, node_device_eui, 8);
+	memcpy(g_lorawan_settings.node_app_eui, node_app_eui, 8);
+	memcpy(g_lorawan_settings.node_app_key, node_app_key, 16);
+	g_lorawan_settings.adr_enabled = false;
+	g_lorawan_settings.public_network = true;
+	g_lorawan_settings.duty_cycle_enabled = false;
+	g_lorawan_settings.tx_power = TX_POWER_0;
+	g_lorawan_settings.data_rate = DR_3;
+	g_lorawan_settings.lora_class = CLASS_A;
+	g_lorawan_settings.subband_channels = 2;
+	g_lorawan_settings.app_port = LORAWAN_APP_PORT;
+	g_lorawan_settings.confirmed_msg_enabled = LMH_UNCONFIRMED_MSG;
+	g_lorawan_settings.resetRequest = true;
+	g_lorawan_settings.lora_region = LORAMAC_REGION_US915;
+
+	// Save LoRaWAN settings
+	api_set_credentials();
+
 	// Initalize Display here, went want info now!
 	// TODO: Can I init even sooner than this?
 	ftester_init();
-
 }
 
 /**
  * @brief Application specific initializations
- * 
+ *
  * @return true Initialization success
  * @return false Initialization failure
  */
@@ -85,6 +115,10 @@ bool init_app(void)
 	pinMode(WB_IO2, OUTPUT);
 	digitalWrite(WB_IO2, HIGH);
 
+	// IO for button-press to enable manual uplink triggering
+	pinMode(WB_IO1, INPUT);
+	attachInterrupt(WB_IO1, btn_int_callback, FALLING);
+
 	// Initialize GNSS module
 	gnss_option = init_gnss();
 
@@ -94,7 +128,7 @@ bool init_app(void)
 	if (g_lorawan_settings.send_repeat_time != 0)
 	{
 		// Set delay for sending to 1/2 of scheduled sending
-		//min_delay = g_lorawan_settings.send_repeat_time / 2;
+		// min_delay = g_lorawan_settings.send_repeat_time / 2;
 		min_delay = 15000;
 	}
 	else
@@ -125,7 +159,7 @@ void app_event_handler(void)
 	if ((g_task_event_type & STATUS) == STATUS)
 	{
 		g_task_event_type &= N_STATUS;
-		
+
 		MYLOG("APP", "Timer wakeup");
 		if (g_ble_uart_is_connected)
 		{
@@ -154,20 +188,20 @@ void app_event_handler(void)
 			batt_level.batt16 = read_batt();
 			g_mapper_data.batt_1 = batt_level.batt8[0];
 			g_mapper_data.batt_2 = batt_level.batt8[1];
-			
+
 			MYLOG("APP", "Battery level %d", batt_level.batt16);
 			MYLOG("APP", "Trying to poll GNSS position");
-			if(g_ble_uart_is_connected)
+			if (g_ble_uart_is_connected)
 			{
 				g_ble_uart.printf("Battery: %.2f V\n", batt_level.batt16 / 1000.0);
 				g_ble_uart.print("Trying to poll GNSS position\n");
 			}
-			
+
 			if (poll_gnss(gnss_option))
 			{
 				MYLOG("APP", "Valid GNSS position acquired");
 
-				//Hook for Field Tester
+				// Hook for Field Tester
 				ftester_gps_fix(true);
 
 				if (g_ble_uart_is_connected)
@@ -190,7 +224,8 @@ void app_event_handler(void)
 				MYLOG("APP", "Batt 1: %02X", g_mapper_data.batt_1);
 				MYLOG("APP", "Batt 2: %02X", g_mapper_data.batt_2);
 
-				if (g_ble_uart_is_connected) {
+				if (g_ble_uart_is_connected)
+				{
 					g_ble_uart.printf("Lat 1: %02X\n", g_mapper_data.lat_1);
 					g_ble_uart.printf("Lat 2: %02X\n", g_mapper_data.lat_2);
 					g_ble_uart.printf("Lat 3: %02X\n", g_mapper_data.lat_3);
@@ -209,7 +244,7 @@ void app_event_handler(void)
 
 				// Hook for Field Tester
 				ftester_tx_beacon();
-				
+
 				lmh_error_status result = send_lora_packet((uint8_t *)&g_mapper_data, MAPPER_DATA_LEN);
 				switch (result)
 				{
@@ -221,7 +256,7 @@ void app_event_handler(void)
 					}
 					/// \todo set a flag that TX cycle is running
 					lora_busy = true;
-					
+
 					break;
 				case LMH_BUSY:
 					MYLOG("APP", "LoRa transceiver is busy");
@@ -238,13 +273,12 @@ void app_event_handler(void)
 					}
 					break;
 				}
-
 			}
 			else
 			{
 				MYLOG("APP", "No valid GNSS position");
 
-				//Hook for Field Tester
+				// Hook for Field Tester
 				ftester_gps_fix(false);
 
 				if (g_ble_uart_is_connected)
@@ -325,11 +359,40 @@ void app_event_handler(void)
 			api_timer_restart(g_lorawan_settings.send_repeat_time);
 		}
 	}
+
+	// BTN trigger event
+	if ((g_task_event_type & BTN_TRIGGER) == BTN_TRIGGER && g_lpwan_has_joined)
+	{
+		g_task_event_type &= N_BTN_TRIGGER;
+
+		// Hook for Field Tester, still call this on button trigger
+		ftester_acc_event();
+
+		MYLOG("APP", "BTN triggered");
+		if (g_ble_uart_is_connected)
+		{
+			g_ble_uart.print("BTN triggered\n");
+		}
+
+		// Don't worry about delayed sending, allow for button spamming!
+
+		// Remember last send time
+		last_pos_send = millis();
+
+		// Trigger a GNSS reading and packet sending
+		g_task_event_type |= STATUS;
+
+		// Reset the standard timer
+		if (g_lorawan_settings.send_repeat_time != 0)
+		{
+			api_timer_restart(g_lorawan_settings.send_repeat_time);
+		}
+	}
 }
 
 /**
  * @brief Handle BLE UART data
- * 
+ *
  */
 void ble_data_handler(void)
 {
@@ -360,7 +423,7 @@ void ble_data_handler(void)
 
 /**
  * @brief Handle received LoRa Data
- * 
+ *
  */
 void lora_data_handler(void)
 {
@@ -452,12 +515,24 @@ void tud_cdc_rx_cb(uint8_t itf)
 /**
  * @brief Timer function used to avoid sending packages too often.
  * 			Delays the next package by 10 seconds
- * 
- * @param unused 
+ *
+ * @param unused
  * 			Timer handle, not used
  */
 void send_delayed(TimerHandle_t unused)
 {
 	g_task_event_type |= STATUS;
 	xSemaphoreGiveFromISR(g_task_sem, &g_higher_priority_task_woken);
+}
+
+/**
+ * @brief BTN interrupt handler
+ * @note gives semaphore to wake up main loop
+ *
+ */
+void btn_int_callback(void)
+{
+	g_task_event_type |= BTN_TRIGGER;
+	MYLOG("APP", "button interrupt callback");
+	xSemaphoreGiveFromISR(g_task_sem, pdFALSE);
 }
